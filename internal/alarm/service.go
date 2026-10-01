@@ -50,6 +50,19 @@ func (s *Service) Recover(id uuid.UUID, now time.Time) (model.Alarm, error) {
 	return value, nil
 }
 
+// RecoverIfExists 在报警存在时消除它，不存在时不报错（供重放与复役幂等调用）。
+func (s *Service) RecoverIfExists(id uuid.UUID, now time.Time) (model.Alarm, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.alarms[id]
+	if !ok {
+		return model.Alarm{}, false
+	}
+	value = value.Recover(now)
+	s.alarms[id] = value
+	return value, true
+}
+
 func (s *Service) Active(lineID model.LineID) []model.Alarm {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

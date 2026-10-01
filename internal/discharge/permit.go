@@ -76,6 +76,57 @@ func (b *PermitBook) Current(batchID uuid.UUID) (Permit, bool) {
 	return permit, ok
 }
 
+// latestForLine 必须在持锁状态下调用，返回该处理线最近一张许可。
+func (b *PermitBook) latestForLine(lineID model.LineID) (Permit, bool) {
+	var found Permit
+	matched := false
+	for _, permit := range b.byBatch {
+		if permit.LineID != lineID {
+			continue
+		}
+		if !matched || permit.IssuedAt.After(found.IssuedAt) {
+			found, matched = permit, true
+		}
+	}
+	return found, matched
+}
+
+// RevokeLine 因排水阀封锁挂牌而吊销该处理线在效的排放许可，不重新开阀。
+func (b *PermitBook) RevokeLine(lineID model.LineID, now time.Time) (Permit, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	permit, ok := b.latestForLine(lineID)
+	if !ok || !permit.Active {
+		return Permit{}, false
+	}
+	stamp := now.UTC()
+	permit.Active = false
+	permit.RevokedAt = &stamp
+	b.byBatch[permit.BatchID] = permit
+	return permit, true
+}
+
+// ReinstateLine 在排水阀复役后，依据最近一次合格化验重新签发排放许可并开阀。
+// 该处理线从未取得过许可时返回 false，由调用方按常规流程重新化验申请。
+func (b *PermitBook) ReinstateLine(lineID model.LineID, now time.Time) (Permit, bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	previous, ok := b.latestForLine(lineID)
+	if !ok || previous.SampleID == uuid.Nil {
+		return Permit{}, false, nil
+	}
+	permit := Permit{
+		ID: uuid.New(), LineID: lineID, BatchID: previous.BatchID,
+		SampleID: previous.SampleID, SampleRevision: previous.SampleRevision,
+		Active: true, IssuedAt: now.UTC(),
+	}
+	if err := b.valves.Open(lineID, permit.ID, now); err != nil {
+		return Permit{}, false, err
+	}
+	b.byBatch[permit.BatchID] = permit
+	return permit, true, nil
+}
+
 func (b *PermitBook) All() []Permit {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

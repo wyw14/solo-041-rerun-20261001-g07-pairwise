@@ -7,19 +7,21 @@ import (
 )
 
 type LineSummary struct {
-	LineID     model.LineID       `json:"line_id"`
-	Stage      model.ProcessStage `json:"stage"`
-	Generation uint64             `json:"generation"`
-	Emergency  bool               `json:"emergency"`
-	BatchID    string             `json:"batch_id,omitempty"`
+	LineID       model.LineID       `json:"line_id"`
+	Stage        model.ProcessStage `json:"stage"`
+	Generation   uint64             `json:"generation"`
+	Emergency    bool               `json:"emergency"`
+	BatchID      string             `json:"batch_id,omitempty"`
+	LockoutCount int                `json:"lockout_count"`
 }
 
-func SummarizeLines(lines []model.LineState) []LineSummary {
+func SummarizeLines(lines []model.LineState, lockoutCounts map[model.LineID]int) []LineSummary {
 	result := make([]LineSummary, 0, len(lines))
 	for _, line := range lines {
 		result = append(result, LineSummary{
 			LineID: line.ID, Stage: line.Stage, Generation: line.Generation,
 			Emergency: line.Emergency, BatchID: line.BatchID,
+			LockoutCount: lockoutCounts[line.ID],
 		})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].LineID < result[j].LineID })

@@ -13,6 +13,7 @@ type HandoverPhase string
 
 const (
 	HandoverPriming   HandoverPhase = "priming"
+	HandoverSuspended HandoverPhase = "suspended"
 	HandoverCompleted HandoverPhase = "completed"
 )
 
@@ -60,6 +61,9 @@ func (b *HandoverBook) ConfirmReady(lineID model.LineID, pumpID string, generati
 	if handover.Generation != generation || handover.ToPump != pumpID {
 		return Handover{}, errors.New("pump ready confirmation does not belong to current handover")
 	}
+	if handover.Phase == HandoverSuspended {
+		return Handover{}, errors.New("pump handover is suspended while a pump is locked out")
+	}
 	if flow <= 0 {
 		return Handover{}, errors.New("new duty pump has no confirmed flow")
 	}
@@ -68,6 +72,36 @@ func (b *HandoverBook) ConfirmReady(lineID model.LineID, pumpID string, generati
 	handover.CompletedAt = &completed
 	b.current[lineID] = handover
 	return handover, nil
+}
+
+// Suspend 因交接涉及的泵被现场封锁而挂起在途交接，拒绝后续接管确认。
+func (b *HandoverBook) Suspend(lineID model.LineID, pumpID string, now time.Time) (Handover, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	handover, ok := b.current[lineID]
+	if !ok || handover.Phase != HandoverPriming {
+		return Handover{}, false
+	}
+	if handover.FromPump != pumpID && handover.ToPump != pumpID {
+		return Handover{}, false
+	}
+	handover.Phase = HandoverSuspended
+	handover.CompletedAt = nil
+	b.current[lineID] = handover
+	return handover, true
+}
+
+// Resume 在交接泵复役后解除挂起，回到灌注阶段等待重新确认接管流量。
+func (b *HandoverBook) Resume(lineID model.LineID, now time.Time) (Handover, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	handover, ok := b.current[lineID]
+	if !ok || handover.Phase != HandoverSuspended {
+		return Handover{}, false
+	}
+	handover.Phase = HandoverPriming
+	b.current[lineID] = handover
+	return handover, true
 }
 
 func (b *HandoverBook) Current(lineID model.LineID) (Handover, bool) {

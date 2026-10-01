@@ -17,6 +17,9 @@ func (p *Plant) StartHandover(lineID model.LineID, fromPump, toPump string) (slu
 	if !ok || state.Emergency {
 		return sludge.Handover{}, errors.New("process line cannot start pump handover")
 	}
+	if p.lockouts.IsLocked(fromPump) || p.lockouts.IsLocked(toPump) {
+		return sludge.Handover{}, errors.New("pump handover rejected: a participating pump is locked out for maintenance")
+	}
 	return p.handovers.Start(lineID, fromPump, toPump, state.Generation, p.now())
 }
 
@@ -39,6 +42,9 @@ func (p *Plant) StartSludgeSequence(lineID model.LineID, pumpID string, number u
 	p.mu.RUnlock()
 	if !ok || state.Emergency {
 		return sludge.Sequence{}, errors.New("process line cannot start sludge sequence")
+	}
+	if p.lockouts.IsLocked(pumpID) {
+		return sludge.Sequence{}, errors.New("sludge sequence rejected: pump is locked out for maintenance")
 	}
 	return p.sequences.Start(lineID, pumpID, number, state.Generation, p.now())
 }

@@ -20,8 +20,13 @@ type advanceBatchRequest struct {
 
 func (s *Server) processLines(w http.ResponseWriter, _ *http.Request) {
 	lines := s.plant.Lines()
+	lockoutCounts := s.plant.LockoutCountsByLine()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"lines": monitor.SummarizeLines(lines), "stages": monitor.CountStages(lines), "permits": s.plant.Permits(),
+		"lines":           monitor.SummarizeLines(lines, lockoutCounts),
+		"stages":          monitor.CountStages(lines),
+		"permits":         s.plant.Permits(),
+		"lockout_counts":  lockoutCounts,
+		"active_lockouts": s.plant.ActiveLockoutCount(),
 	})
 }
 

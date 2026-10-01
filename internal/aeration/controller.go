@@ -62,3 +62,8 @@ func (c *Controller) Windows() []Window {
 func (c *Controller) Blowers() []Blower {
 	return c.blowers.Snapshot()
 }
+
+// ForceStop 按封锁安全规则强制停止指定风机。
+func (c *Controller) ForceStop(deviceID string, now time.Time) (Blower, bool, error) {
+	return c.blowers.ForceStop(deviceID, now)
+}

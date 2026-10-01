@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/wyw14/cry-97/internal/journal"
+	"github.com/wyw14/cry-97/internal/lockout"
 	"github.com/wyw14/cry-97/internal/model"
 )
 
@@ -61,6 +62,25 @@ func (p *Plant) ApplyRecovered(ctx context.Context, event model.Event) error {
 		}
 		if err := p.devices.Publish(ctx, command); err != nil {
 			return err
+		}
+	}
+	if event.Kind == model.EventDeviceLocked || event.Kind == model.EventLockoutUpdated || event.Kind == model.EventDeviceRestored {
+		var tag lockout.Tag
+		if err := event.Decode(&tag); err != nil {
+			return err
+		}
+		if tag.LineID != event.LineID {
+			return errors.New("lockout recovery payload does not match event line")
+		}
+		p.lockouts.ApplyTag(tag)
+		switch event.Kind {
+		case model.EventDeviceLocked:
+			// 重启后仍在封锁期的设备，重新施加安全停机并挂起在途工序。
+			p.quiesceLockedDevice(tag, event.Generation, event.OccurredAt)
+			p.reassertLockoutAlarm(tag, event.OccurredAt)
+		case model.EventDeviceRestored:
+			p.resumeRestoredDevice(tag, event.OccurredAt)
+			p.reassertLockoutAlarm(tag, event.OccurredAt)
 		}
 	}
 	state.LastEventSeq = event.Sequence

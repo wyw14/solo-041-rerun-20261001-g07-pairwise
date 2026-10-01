@@ -16,6 +16,7 @@ type SequenceStatus string
 const (
 	SequenceSwitching SequenceStatus = "switching"
 	SequenceRunning   SequenceStatus = "running"
+	SequenceSuspended SequenceStatus = "suspended"
 	SequenceFailed    SequenceStatus = "failed"
 )
 
@@ -68,6 +69,9 @@ func (b *SequenceBook) ConfirmFlow(lineID model.LineID, sequenceID uuid.UUID, ge
 	if !ok || sequence.ID != sequenceID || sequence.Generation != generation {
 		return Sequence{}, errors.New("sludge sequence confirmation is stale")
 	}
+	if sequence.Status == SequenceSuspended {
+		return Sequence{}, errors.New("sludge sequence is suspended while its pump is locked out")
+	}
 	if _, err := b.pumps.Ready(sequence.PumpID, sequence.ID, sequence.Generation, flow, now); err != nil {
 		return Sequence{}, err
 	}
@@ -75,6 +79,47 @@ func (b *SequenceBook) ConfirmFlow(lineID model.LineID, sequenceID uuid.UUID, ge
 	sequence.UpdatedAt = now.UTC()
 	b.byLine[lineID] = sequence
 	return sequence, nil
+}
+
+// Suspend 因属主泵被现场封锁而挂起在途工序，并按安全规则停泵。
+// 挂起期间 ConfirmFlow 会被拒绝；工序不会静默恢复，必须由现场重新确认或转失败补偿。
+func (b *SequenceBook) Suspend(lineID model.LineID, pumpID string, now time.Time) (Sequence, bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sequence, ok := b.byLine[lineID]
+	if !ok {
+		return Sequence{}, false, errors.New("sludge sequence is not active")
+	}
+	if sequence.Status == SequenceFailed {
+		return Sequence{}, false, errors.New("sludge sequence has already failed")
+	}
+	if sequence.PumpID != pumpID {
+		return Sequence{}, false, nil
+	}
+	if sequence.Status == SequenceSuspended {
+		return sequence, false, nil
+	}
+	if _, _, err := b.pumps.Suspend(sequence.PumpID, now); err != nil {
+		return Sequence{}, false, err
+	}
+	sequence.Status = SequenceSuspended
+	sequence.UpdatedAt = now.UTC()
+	b.byLine[lineID] = sequence
+	return sequence, true, nil
+}
+
+// Resume 在属主泵复役后解除工序挂起，回到切换阶段等待现场重新确认流量。
+func (b *SequenceBook) Resume(lineID model.LineID, now time.Time) (Sequence, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sequence, ok := b.byLine[lineID]
+	if !ok || sequence.Status != SequenceSuspended {
+		return Sequence{}, false
+	}
+	sequence.Status = SequenceSwitching
+	sequence.UpdatedAt = now.UTC()
+	b.byLine[lineID] = sequence
+	return sequence, true
 }
 
 func (b *SequenceBook) Fail(lineID model.LineID, now time.Time) (Sequence, error) {

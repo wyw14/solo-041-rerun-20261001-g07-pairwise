@@ -17,6 +17,7 @@ import (
 	"github.com/wyw14/cry-97/internal/interlock"
 	"github.com/wyw14/cry-97/internal/journal"
 	"github.com/wyw14/cry-97/internal/lab"
+	"github.com/wyw14/cry-97/internal/lockout"
 	"github.com/wyw14/cry-97/internal/model"
 	"github.com/wyw14/cry-97/internal/sensor"
 	"github.com/wyw14/cry-97/internal/settling"
@@ -48,6 +49,8 @@ type Plant struct {
 	sequences     *sludge.SequenceBook
 	compensations *journal.CompensationQueue
 	devices       *DeviceBus
+	deviceIndex   *DeviceRegistry
+	lockouts      *lockout.Book
 	sampler       *sensor.Sampler
 	receiver      *sensor.Receiver
 }
@@ -100,7 +103,8 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 	if err != nil {
 		return nil, err
 	}
-	fleet, err := aeration.NewBlowerFleet(blowers)
+	lockouts := lockout.NewBook()
+	fleet, err := aeration.NewBlowerFleet(blowers, lockouts)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +112,7 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 	if err != nil {
 		return nil, err
 	}
-	valves, err := discharge.NewValveController(lines)
+	valves, err := discharge.NewValveController(lines, lockouts)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +120,7 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 	if err != nil {
 		return nil, err
 	}
-	pumps, err := sludge.NewPumpController(pumpList)
+	pumps, err := sludge.NewPumpController(pumpList, lockouts)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +134,7 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 	if err != nil {
 		return nil, err
 	}
-	devices := NewDeviceBus()
+	devices := NewDeviceBus(lockouts)
 	dosingService, err := dosing.NewService(store, devices, dosing.NewLedger())
 	if err != nil {
 		return nil, err
@@ -140,6 +144,24 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 		return nil, err
 	}
 	sampler := sensor.NewSampler()
+	deviceIndex := NewDeviceRegistry()
+	for _, lineID := range lines {
+		if err := deviceIndex.Register(DeviceInfo{
+			DeviceID: "blower-basin-" + string(lineID), Kind: model.DeviceBlower, LineID: lineID,
+		}); err != nil {
+			return nil, err
+		}
+		if err := deviceIndex.Register(DeviceInfo{
+			DeviceID: valves.DeviceID(lineID), Kind: model.DeviceValve, LineID: lineID,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	for _, pump := range pumpList {
+		if err := deviceIndex.Register(DeviceInfo{DeviceID: pump.ID, Kind: model.DevicePump, LineID: pump.LineID}); err != nil {
+			return nil, err
+		}
+	}
 	plant := &Plant{
 		now: now, lines: make(map[model.LineID]model.LineState), batches: make(map[uuid.UUID]model.Batch),
 		lineBatches: make(map[model.LineID]uuid.UUID), store: store, snapshots: snapshots,
@@ -147,7 +169,8 @@ func NewPlant(dataDir string, lines []model.LineID, now func() time.Time) (*Plan
 		labResults: lab.NewResults(), permits: permits, valves: valves, alarms: alarm.NewService(),
 		settling: make(map[model.LineID]*settling.State), cycles: settling.NewCycleBook(),
 		interlocks: arbiter, drains: drains, pumps: pumps, handovers: sludge.NewHandoverBook(),
-		sequences: sequences, compensations: queue, devices: devices, sampler: sampler, receiver: receiver,
+		sequences: sequences, compensations: queue, devices: devices, deviceIndex: deviceIndex,
+		lockouts: lockouts, sampler: sampler, receiver: receiver,
 	}
 	for _, lineID := range lines {
 		plant.lines[lineID] = model.NewLineState(lineID, now())

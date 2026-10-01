@@ -10,13 +10,15 @@ type HealthSource interface {
 	Healthy() bool
 	Lines() []model.LineState
 	Alarms() []model.Alarm
+	ActiveLockoutCount() int
 }
 
 type Health struct {
-	Ready        bool      `json:"ready"`
-	ProcessLines int       `json:"process_lines"`
-	ActiveAlarms int       `json:"active_alarms"`
-	ObservedAt   time.Time `json:"observed_at"`
+	Ready          bool      `json:"ready"`
+	ProcessLines   int       `json:"process_lines"`
+	ActiveAlarms   int       `json:"active_alarms"`
+	ActiveLockouts int       `json:"active_lockouts"`
+	ObservedAt     time.Time `json:"observed_at"`
 }
 
 type Service struct {
@@ -38,7 +40,8 @@ func (s *Service) Observe() Health {
 	}
 	value := Health{
 		Ready: s.source.Healthy(), ProcessLines: len(s.source.Lines()),
-		ActiveAlarms: active, ObservedAt: s.now().UTC(),
+		ActiveAlarms: active, ActiveLockouts: s.source.ActiveLockoutCount(),
+		ObservedAt: s.now().UTC(),
 	}
 	return value
 }

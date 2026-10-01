@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BioTreat 现场检修</title><link rel="stylesheet" href="/assets/app.css"></head>
+<body><header><div class="brand">BioTreat 工艺联控</div><nav><a href="/process">工艺总控</a><a href="/aeration">曝气调节</a><a href="/sludge">污泥回流</a><a href="/alarms">异常处置</a><a aria-current="page" href="/maintenance">现场检修</a></nav></header>
+<main><div class="page-head"><div><h1>现场检修封锁与复役</h1><div class="muted">设备停用登记、安全检查确认、运行前校验与复役</div></div><div class="status"><span class="dot"></span><span id="health">checking</span></div></div>
+<div class="grid">
+  <section class="panel wide"><h2>封锁登记 <span class="muted" id="activeCount"></span></h2><table><thead><tr><th>设备</th><th>类型</th><th>处理线</th><th>阶段</th><th>责任人</th><th>停用原因</th><th>时间</th></tr></thead><tbody id="tags"></tbody></table></section>
+  <section class="panel"><h2>登记停用 / 挂牌</h2><form id="lock"><label>设备<select name="device" id="deviceSelect"></select></label><label>停用原因<input name="reason" value="bearing inspection"></label><label>现场责任人<input name="owner" value="maintenance-shift-1"></label><button class="danger">登记封锁</button></form></section>
+  <section class="panel wide" id="workPanel" hidden><h2>封锁处置 <span class="muted" id="workTitle"></span></h2>
+    <h2>安全检查项</h2><table><thead><tr><th>检查项</th><th>状态</th><th>确认人</th><th></th></tr></thead><tbody id="checks"></tbody></table>
+    <form id="checkForm" class="inline"><label>确认人<input name="operator" value="safety-officer-1"></label><label>备注<input name="note" placeholder="现场确认备注"></label><button>确认所选检查项</button></form>
+    <h2>运行前校验（复役前重新执行）</h2><form id="precheck"><label>绝缘电阻 MΩ（≥0.5）<input name="insulation" type="number" step="0.1" value="1.2"></label><label>振动 mm/s（≤7.1）<input name="vibration" type="number" step="0.1" value="3.4"></label><label>绕组温度 ℃（≤85）<input name="temperature" type="number" step="0.1" value="46"></label><label>校验人<input name="operator" value="duty-engineer-1"></label><button>提交运行前校验</button></form>
+    <h2>复役</h2><form id="restore" class="inline"><label>复役确认人<input name="operator" value="shift-supervisor-1"></label><button>检查确认并复役</button></form>
+  </section>
+  <section class="panel wide"><h2>操作结果</h2><pre id="output">等待操作</pre></section>
+</div></main>
+<script src="/assets/common.js"></script><script>
+let devices=[], tagsData=[], selectedTag=null;
+const $=s=>document.querySelector(s);
+async function loadDevices(){const d=await request('/api/devices');devices=d.devices;$('#deviceSelect').innerHTML=devices.map(x=>`<option value="${x.device_id}">${x.device_id} · ${x.kind} · ${x.line_id}</option>`).join('')}
+async function load(){const d=await request('/api/lockouts');tagsData=d.lockouts;$('#activeCount').textContent=`· 在效封锁 ${d.active_count}`;
+ $('#tags').innerHTML=tagsData.map(t=>`<tr${t.phase==='restored'?' class="muted"':''}><td>${t.device_id}</td><td>${t.kind}</td><td>${t.line_id}</td><td><button data-tag="${t.id}" class="taglink">${t.phase}</button></td><td>${t.owner}</td><td>${t.reason}</td><td>${(t.locked_at||'').slice(0,19).replace('T',' ')}</td></tr>`).join('');
+ document.querySelectorAll('.taglink').forEach(b=>b.onclick=()=>selectTag(b.dataset.tag));
+ if(selectedTag)renderWork(tagsData.find(t=>t.id===selectedTag))}
+function selectTag(id){selectedTag=id;$('#workPanel').hidden=false;renderWork(tagsData.find(t=>t.id===id))}
+function renderWork(t){if(!t)return;$('#workTitle').textContent=t.device_id+' · '+t.phase;
+ $('#checks').innerHTML=t.checks.map((c,i)=>`<tr><td>${c.label} <span class="muted">${c.code}</span></td><td>${c.confirmed?'已确认 '+new Date(c.confirmed_at).toLocaleString():'待确认'}</td><td>${c.confirmed_by||'-'}</td><td>${c.confirmed?'':`<label class="inline"><input type="checkbox" data-code="${c.code}" checked></label>`}</td></tr>`).join('')}
+$('#lock').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target);try{const t=await request('/api/lockouts',{method:'POST',body:JSON.stringify({device_id:f.get('device'),reason:f.get('reason'),owner:f.get('owner')})});show(t);selectedTag=t.id;await load()}catch(err){showError(err)}});
+$('#checkForm').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target);const codes=[...document.querySelectorAll('[data-code]:checked')].map(x=>x.dataset.code);if(!codes.length){showError(new Error('请至少选择一项检查'));return}
+ try{for(const code of codes){await request(`/api/lockouts/${selectedTag}/checks`,{method:'POST',body:JSON.stringify({code,operator:f.get('operator'),note:f.get('note')})})}show({confirmed:codes});await load()}catch(err){showError(err)}});
+$('#precheck').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target);try{show(await request(`/api/lockouts/${selectedTag}/prechecks`,{method:'POST',body:JSON.stringify({insulation_mohm:Number(f.get('insulation')),vibration_mm_s:Number(f.get('vibration')),temperature_c:Number(f.get('temperature')),operator:f.get('operator')})}));await load()}catch(err){showError(err)}});
+$('#restore').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target);try{show(await request(`/api/lockouts/${selectedTag}/restore`,{method:'POST',body:JSON.stringify({operator:f.get('operator')})}));await load()}catch(err){showError(err)}});
+loadDevices().then(load).catch(showError);setInterval(()=>{load().catch(()=>{})},5000);
+</script></body></html>

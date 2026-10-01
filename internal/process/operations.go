@@ -19,6 +19,9 @@ func (p *Plant) SubmitAeration(ctx context.Context, lineID model.LineID, basinID
 	if !ok || state.Emergency {
 		return aeration.Window{}, nil, errors.New("process line cannot accept aeration samples")
 	}
+	if p.lockouts.IsLocked("blower-" + basinID) {
+		return aeration.Window{}, nil, errors.New("aeration command rejected: blower is locked out for field maintenance")
+	}
 	return p.aeration.SubmitWindow(ctx, lineID, basinID, payload, state.Generation, p.now())
 }
 
